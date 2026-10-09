@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+graphify-out
+docker
+.vscode
+graphify-out
+INPUT_PATH
+.pytest_cache

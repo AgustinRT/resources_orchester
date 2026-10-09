@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "fastapi-python": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "fastapi-python/SKILL.md",
+      "computedHash": "1d7346210a6690d2faeb089f074c0dc20a7056c2c83ac1062a11c1b73158be72"
+    },
+    "postgres": {
+      "source": "sanjay3290/postgres-skill",
+      "sourceType": "github",
+      "skillPath": "skills/postgres/SKILL.md",
+      "computedHash": "02b414cf7521ba8a204a57e8309d67632a970ba7b39093cc484ac4cc4a60c016"
+    },
+    "sqlalchemy-postgres": {
+      "source": "cfircoo/claude-code-toolkit",
+      "sourceType": "github",
+      "skillPath": "skills/sqlalchemy-postgres/SKILL.md",
+      "computedHash": "8d0a7adb37791dc451aee84ad4f9b4cc736c8ff9ed65c1226177814067798a03"
+    }
+  }
+}
