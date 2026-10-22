@@ -1,15 +1,13 @@
-from typing import List, Optional
+from typing import List
 
 from resources_orchester.domain.enum.data_use import DataUse
 from resources_orchester.domain.model.data_resources import DataResources
 from resources_orchester.infrastructure.persistence.entities import registry_applications
-from resources_orchester.infrastructure.persistence.entities.applications_type_definition import ApplicationsTypeDefinition
 from resources_orchester.infrastructure.persistence.entities.link_dict_application import DataDictionaryAppRef
 from resources_orchester.infrastructure.persistence.entities.registry_applications import RegistryApplications
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, delete, select
-from resources_orchester.infrastructure.persistence.postgre_database import DatabaseManager
 from resources_orchester.infrastructure.persistence.entities.data_dict_registry import DataRefDict
 
 

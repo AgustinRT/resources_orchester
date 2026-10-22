@@ -18,13 +18,11 @@ class KafkaRequestConsumerService:
             topics: Tópicos esperados (generalmente solo ['request']).
         """
         self.group_id = group_id
-        self.topics = topics or ["request"] # Por defecto, solo escucha el tópico 'request'
-        
-        # Configuración del consumidor para el grupo "mcps"
+        self.topics = topics or ["request"]
+
         self.consumer = KafkaConsumer(
             *self.topics, 
             bootstrap_servers=bootstrap_servers,
-            group_id=self.group_id, 
             auto_offset_reset='earliest', # Empezar desde el principio si no hay offset registrado
             value_deserializer=lambda x: json.loads(x.decode('utf-8')) # Deserializa JSON automáticamente
         )
@@ -38,9 +36,6 @@ class KafkaRequestConsumerService:
         payload = message.value
         print(f"[REQUEST_CONSUME] Tópico: {topic} | Tipo de evento: REQUEST")
         print(f"[REQUEST_CONSUME] Payload recibido (Solicitud): {json.dumps(payload)}")
-        # *** AQUÍ SE DEBE LLAMAR AL SERVICIO DE ORQUESTACIÓN PARA EL COMANDO ***
-        # Ejemplo: CommandService.execute_request(payload)
-
 
     def start_consuming(self):
         """

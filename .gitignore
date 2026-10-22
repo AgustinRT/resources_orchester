@@ -14,3 +14,8 @@ docker
 graphify-out
 INPUT_PATH
 .pytest_cache
+
+analisis.md
+dependencies.md
+improves.md
+review.md

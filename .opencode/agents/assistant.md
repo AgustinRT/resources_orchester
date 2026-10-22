@@ -1,7 +1,7 @@
 ---
 description: Support the deveoper writting par of the code
 mode: primary
-model: google/gemma-4-e4b
+# model: google/gemma-4-e4b || google/gemma-4-12b
 temperature: 0
 tools:
     edit: true

@@ -1,4 +1,5 @@
 import json
+import os
 
 from kafka import KafkaConsumer
 import pytest
@@ -13,22 +14,36 @@ from resources_orchester.infrastructure.messaging.ports.kafka_port_out import Ka
 from test.infraestructure.kafka_container_tester import consumer_tester, rise_kafka_container
 from test.infraestructure.utils_tester import create_random_data_resources
 
-@pytest_asyncio.fixture(scope="session")
-async def kafka_container():
-    """Start a kafka container."""
-    async with rise_kafka_container() as kafka:
-        yield kafka.get_bootstrap_server()
+# @pytest_asyncio.fixture(scope="session")
+# async def kafka_container():
+#     """Start a kafka container."""
+
+#     os.environ["ENVIROMENT_EXECUTION"] = "test"
+#     async with rise_kafka_container() as kafka:
+#         os.environ["bootstrap_servers"] = kafka.get_bootstrap_server()
+#         yield kafka.get_bootstrap_server()
 
 @pytest_asyncio.fixture(scope="function")
-async def producer_port_out(kafka_container) -> KafkaPortOut:
-    return get_messaging_port_out({
-        "server": kafka_container,
-        "group": "mcps"
-    })
+async def producer_port_out(global_setup) -> KafkaPortOut:
+    return get_messaging_port_out()
 
 @pytest_asyncio.fixture(scope="function")
 async def consumer_container(kafka_container) -> KafkaConsumer:
     return consumer_tester(kafka_container, "update")
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def global_setup():
+    print("Setting up global resources...")
+    os.environ["ENVIROMENT_EXECUTION"] = "test"
+   
+    # Yield to allow tests to run
+
+    async with rise_kafka_container() as kafka:
+        os.environ["bootstrap_servers"] = kafka.get_bootstrap_server()
+        yield kafka.get_bootstrap_server()
+
+        os.environ.pop("ENVIROMENT_EXECUTION", None)
 
 @pytest.mark.asyncio
 async def test_simply_kafka_producer(producer_port_out: KafkaPortOut, consumer_container: KafkaConsumer):

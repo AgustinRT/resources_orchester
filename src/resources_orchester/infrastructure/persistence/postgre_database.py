@@ -4,9 +4,6 @@ from dotenv import load_dotenv, find_dotenv
 import sqlalchemy
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from typing import AsyncGenerator
-import psycopg_pool
-# Asumiendo que se requiere la librería 'psycopg' para el driver asíncrono
-# Aunque SQLAlchemy maneja esto a través de la URL del dialecto, es bueno saberlo.
 
 class DatabaseManager:
     """
@@ -50,12 +47,6 @@ class DatabaseManager:
             raise EnvironmentError(
                 "DATABASE_URL no está definida en las variables de entorno o en el .env file."
             )
-
-        pool = psycopg_pool.AsyncConnectionPool(conninfo=db_url,
-                                                open=False,
-                                                check=psycopg_pool.AsyncConnectionPool.check_connection,
-                                                close_returns=True)
-        await pool.open()
 
         self._engine = create_async_engine(
                             db_url,

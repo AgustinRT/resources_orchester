@@ -23,26 +23,26 @@ services:
     container_name: kafka-broker-mcp
     ports:
       # Mapeamos el puerto definido en el env (ejemplo: 9093)
-      - "${KAFKA_BROKER_PORT}:9092" 
+      - "${KAFKA_BROKER_PORT}:9092"
     environment:
     - .env
     restart: always
     volumes:
       - kafka_data_mcp:/data
 
-  kafka-ui:
-    image: ghcr.io/kafbat/kafka-ui:latest
-    container_name: kafka-ui
-    ports:
-      - "8080:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
-      DYNAMIC_CONFIG_ENABLED: 'true'
-    depends_on:
-      - kafka
-    volumes:
-      - ~/kui/config.yml:/etc/kafkaui/dynamic_config.yaml
+  # kafka-ui:
+  #   image: ghcr.io/kafbat/kafka-ui:latest
+  #   container_name: kafka-ui
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     KAFKA_CLUSTERS_0_NAME: local
+  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+  #     DYNAMIC_CONFIG_ENABLED: 'true'
+  #   depends_on:
+  #     - kafka
+  #   volumes:
+  #     - ~/kui/config.yml:/etc/kafkaui/dynamic_config.yaml
 
 volumes:
   kafka_data_mcp:

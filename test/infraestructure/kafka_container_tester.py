@@ -6,9 +6,6 @@ import json
 from kafka import KafkaConsumer, KafkaProducer
 from testcontainers.community.kafka import KafkaContainer
 
-# image: str = "confluentinc/cp-kafka:7.6.0",
-# port: int = 9094,
-
 @contextlib.asynccontextmanager
 async def rise_kafka_container():
     with KafkaContainer(port=9094) as kafka:

@@ -1,7 +1,7 @@
 from typing import Protocol
-from resources_orchester.infrastructure.api_router.dtos.messages_request_dto import MessagesRequestDTO
-from resources_orchester.infrastructure.api_router.dtos.database_request_dto import DatabaseRequestDTO
-from resources_orchester.infrastructure.api_router.dtos.rest_request_dto import RestRequestDTO
+from resources_orchester.domain.api_dtos.messages_request_dto import MessagesRequestDTO
+from resources_orchester.domain.api_dtos.database_request_dto import DatabaseRequestDTO
+from resources_orchester.domain.api_dtos.rest_request_dto import RestRequestDTO
 
 from src.resources_orchester.domain.model.data_resources import DataResources
 

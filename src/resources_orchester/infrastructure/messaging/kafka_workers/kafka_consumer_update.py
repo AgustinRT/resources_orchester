@@ -1,5 +1,10 @@
+import asyncio
 import json
 import threading
+from typing import Dict
+from aiokafka import AIOKafkaConsumer
+from dotenv import dotenv_values
+from pathlib import Path
 from kafka import KafkaConsumer
 import os
 
@@ -10,31 +15,25 @@ class KafkaUpdateConsumerService:
     Asume que la lógica de negocio debe manejar el tipo de evento.
     """
 
-    _consumer_thread = None
-
-    def __init__(self):
+    def __init__(self, env_use: str = "dev"):
         """
         Inicializa el consumidor para eventos de actualización/estado.
         """
-        self.group_id = os.environ.get("KAFKA_CONSUMER_GROUP_ID", "mcps")
-        self.topics = [t.strip() for t in os.environ.get("KAFKA_CONSUMER_TOPICS", "update,delete,create").split(',')]
-        self.bootstrap_servers = [os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9093")]
+        env_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.{env_use}")) if f.is_file()][0])
+        self._messagin_config: Dict[str, str] = dotenv_values(env_path)
+        self._bootstrap = self._messagin_config['KAFKA_BOOTSTRAP_SERVERS'] if "KAFKA_BOOTSTRAP_SERVERS" in self._messagin_config else os.getenv("bootstrap_servers")
 
-        self.consumer = KafkaConsumer(
-            *self.topics, 
-            bootstrap_servers=self.bootstrap_servers, 
-            group_id=self.group_id, 
-            auto_offset_reset='earliest', # Empezar desde el principio si no hay offset registrado
-            value_deserializer=lambda x: json.loads(x.decode('utf-8')) # Deserializa JSON automáticamente
-        )
+    async def init_consumer(self):
+        self._topics_consumer = [ x for x in self._messagin_config['KAFKA_CONSUMER_TOPICS'].split(",")]
+        self._consumer = AIOKafkaConsumer(self._topics_consumer[0],
+                                          bootstrap_servers=self._bootstrap,
+                                          value_deserializer=lambda x: json.loads(x.decode('utf-8')))
+        await self._consumer.start()
+        asyncio.create_task(self.consumer_messager())
 
-    def check_consumer_active(self):
-        return False if not self._consumer_thread else True
-
-    def initer_consumer_pasive(self):
-        self._consumer_thread = threading.Thread(target=self.start_consuming)
-        self._consumer_thread.daemon = True
-        self._consumer_thread.start()
+    async def consumer_messager(self):
+        async for msg in self._consumer:
+            self.process_message(msg)
 
     def process_message(self, message):
         """
@@ -45,13 +44,10 @@ class KafkaUpdateConsumerService:
         payload = message.value
         event_type = ""
 
-        if topic in ["update", "delete", "create"]:
-            # Aquí se puede extraer un tipo específico del payload o asumirlo por el tópico
+        if topic in self._topics_consumer:
             event_type = topic.upper()
             print(f"[UPDATE_CONSUME] Tópico: {topic} | Tipo de evento: {event_type}")
             print(f"[UPDATE_CONSUME] Payload recibido: {json.dumps(payload)}")
-            # *** AQUÍ SE DEBE LLAMAR AL SERVICIO DE DOMINIO PARA EL EVENTO ESPECÍFICO ***
-            # Ejemplo: EventService.handle_update(payload)
 
         else:
             print(f"[WARNING] Tópico desconocido o no gestionado en este consumidor: {topic}")
@@ -62,12 +58,25 @@ class KafkaUpdateConsumerService:
         Inicia el bucle infinito de consumo y procesamiento, bloqueando la ejecución.
         Debe ejecutarse como un proceso dedicado (daemon/worker).
         """
-        print(f"[*] Iniciando Kafka Update Consumer Service para grupo '{self.group_id}' en tópicos: {', '.join(self.topics)}...")
+        print(f"[*] Iniciando Kafka Update Consumer Service para grupo ···· en tópicos: {', '.join(self._topics_consumer)}...")
         try:
-            for message in self.consumer:
+            for message in self._consumer:
                 self.process_message(message)
 
         except Exception as e:
             print(f"[ERROR FATAL DE CONSUMO] Ocurrió un error crítico durante el consumo: {e}")
         finally:
-            self.consumer.close()
+            self._consumer.stop()
+
+    def stop_consuming(self):
+        """
+        Inicia el bucle infinito de consumo y procesamiento, bloqueando la ejecución.
+        Debe ejecutarse como un proceso dedicado (daemon/worker).
+        """
+        print(f"[*] Iniciando Kafka Update Consumer Service para grupo ···· en tópicos: {', '.join(self._topics_consumer)}...")
+        try:
+            self._consumer.stop()
+        except Exception as e:
+            print(f"[ERROR FATAL DE CONSUMO] Ocurrió un error crítico durante el consumo: {e}")
+        finally:
+            self._consumer.stop()
