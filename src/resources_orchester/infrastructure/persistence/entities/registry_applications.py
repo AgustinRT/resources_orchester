@@ -1,5 +1,5 @@
 
-from typing import List
+from typing import Any, List
 
 from resources_orchester.infrastructure.persistence.entities.base import Base
 from sqlalchemy import Column, Integer, String, ForeignKey
@@ -13,7 +13,7 @@ class RegistryApplications(Base):
     name_application: Mapped[str] = mapped_column(String(150), nullable=False, unique=True)
     description_application: Mapped[str] = mapped_column(String)
     type_application_id: Mapped[int] = mapped_column(Integer, ForeignKey('type_applications_definition.definition_id'), nullable=False)
-    location_application: Mapped[dict[str, any]] = mapped_column(JSONB, default='{}')
+    location_application: Mapped[dict[str, Any]] = mapped_column(JSONB, default='{}')
 
     type_application = relationship("ApplicationsTypeDefinition", back_populates="applications")
 

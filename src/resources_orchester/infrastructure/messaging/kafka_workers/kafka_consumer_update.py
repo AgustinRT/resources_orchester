@@ -1,82 +1,101 @@
 import asyncio
 import json
-import threading
-from typing import Dict
+import logging
+from contextlib import AbstractAsyncContextManager
+from typing import Any, Callable
+
 from aiokafka import AIOKafkaConsumer
-from dotenv import dotenv_values
-from pathlib import Path
-from kafka import KafkaConsumer
-import os
+from aiokafka.errors import KafkaError
+from pydantic import ValidationError
+
+from resources_orchester.application.ports.inbound.apply_resource_update_port_in import ApplyResourceUpdatePortIn
+from resources_orchester.domain.exception.domain_exceptions import DomainException
+from resources_orchester.domain.model.data_field_resource import DataFieldResource
+from resources_orchester.domain.model.resource_update import ResourceUpdate
+from resources_orchester.infrastructure.bootstrap.settings import KafkaSettings
+from resources_orchester.infrastructure.messaging.dtos.message_resource_payload import MessageResourcePayload
+
+logger = logging.getLogger(__name__)
+
+# Provided by the composition root: opens ONE session / unit of work and yields the use case.
+ApplyResourceUpdateFactory = Callable[[], AbstractAsyncContextManager[ApplyResourceUpdatePortIn]]
+
+
+def to_resource_update(payload: MessageResourcePayload) -> ResourceUpdate:
+    """Inbound message (same envelope this service publishes) -> domain command."""
+    return ResourceUpdate(
+        name=payload.source,
+        data_use=payload.type_resource,
+        description=payload.content.description,
+        fields=[DataFieldResource.model_validate(field) for field in payload.content.fields],
+    )
+
 
 class KafkaUpdateConsumerService:
     """
-    Consumidor especializado para eventos de cambio de estado (CRUD). 
-    Maneja temas como 'update', 'delete' y 'create'.
-    Asume que la lógica de negocio debe manejar el tipo de evento.
+    Consumer for state-change events on the configured consumer topics.
+
+    Runs as ONE background task owned by the application lifespan (see ``run``):
+    * if the broker is unreachable it retries with a fixed backoff instead of preventing the
+      application from starting;
+    * cancelling the task (application shutdown) stops the consumer and closes its connections.
+
+    Each message is an update for a registered resource (MessageResourcePayload envelope). It is
+    handed to the ApplyResourceUpdate use case (ApplyResourceUpdatePortIn), obtained from the
+    composition root with its own session / unit of work per message. Messages that are invalid
+    or cannot be applied are logged and skipped: they never stop the consumer.
     """
 
-    def __init__(self, env_use: str = "dev"):
-        """
-        Inicializa el consumidor para eventos de actualización/estado.
-        """
-        env_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.{env_use}")) if f.is_file()][0])
-        self._messagin_config: Dict[str, str] = dotenv_values(env_path)
-        self._bootstrap = self._messagin_config['KAFKA_BOOTSTRAP_SERVERS'] if "KAFKA_BOOTSTRAP_SERVERS" in self._messagin_config else os.getenv("bootstrap_servers")
+    def __init__(self, settings: KafkaSettings, apply_update_factory: ApplyResourceUpdateFactory):
+        self._settings = settings
+        self._topics_consumer = list(settings.consumer_topics)
+        self._apply_update_factory = apply_update_factory
 
-    async def init_consumer(self):
-        self._topics_consumer = [ x for x in self._messagin_config['KAFKA_CONSUMER_TOPICS'].split(",")]
-        self._consumer = AIOKafkaConsumer(self._topics_consumer[0],
-                                          bootstrap_servers=self._bootstrap,
-                                          value_deserializer=lambda x: json.loads(x.decode('utf-8')))
-        await self._consumer.start()
-        asyncio.create_task(self.consumer_messager())
+    def _build_consumer(self) -> AIOKafkaConsumer:
+        return AIOKafkaConsumer(*self._topics_consumer,
+                                bootstrap_servers=self._settings.bootstrap_servers,
+                                value_deserializer=lambda x: json.loads(x.decode("utf-8")))
 
-    async def consumer_messager(self):
-        async for msg in self._consumer:
-            self.process_message(msg)
+    async def run(self) -> None:
+        """Connect (retrying while Kafka is down) and consume until the task is cancelled."""
+        backoff = self._settings.consumer_retry_backoff_seconds
+        while True:
+            consumer = self._build_consumer()
+            try:
+                await consumer.start()
+            except KafkaError as error:
+                await consumer.stop()
+                logger.warning("Kafka consumer could not connect (%s); retrying in %.1fs", error, backoff)
+                await asyncio.sleep(backoff)
+                continue
 
-    def process_message(self, message):
-        """
-        Procesa un mensaje de Kafka individualmente y determina el tipo de evento.
-        Debe invocar la lógica de negocio apropiada basada en el tópico.
-        """
-        topic = message.topic
-        payload = message.value
-        event_type = ""
+            logger.info("Kafka consumer listening on %s", ", ".join(self._topics_consumer))
+            try:
+                async for message in consumer:
+                    await self.process_message(message)
+            except KafkaError as error:
+                logger.warning("Kafka consumer error (%s); reconnecting in %.1fs", error, backoff)
+                await asyncio.sleep(backoff)
+            finally:
+                await consumer.stop()
 
-        if topic in self._topics_consumer:
-            event_type = topic.upper()
-            print(f"[UPDATE_CONSUME] Tópico: {topic} | Tipo de evento: {event_type}")
-            print(f"[UPDATE_CONSUME] Payload recibido: {json.dumps(payload)}")
-
-        else:
-            print(f"[WARNING] Tópico desconocido o no gestionado en este consumidor: {topic}")
-
-
-    def start_consuming(self):
-        """
-        Inicia el bucle infinito de consumo y procesamiento, bloqueando la ejecución.
-        Debe ejecutarse como un proceso dedicado (daemon/worker).
-        """
-        print(f"[*] Iniciando Kafka Update Consumer Service para grupo ···· en tópicos: {', '.join(self._topics_consumer)}...")
+    async def process_message(self, message: Any) -> None:
+        """Validates the message and applies it through the use case. Never raises (poison messages are skipped)."""
+        if message.topic not in self._topics_consumer:
+            logger.warning("Tópico desconocido o no gestionado en este consumidor: %s", message.topic)
+            return
         try:
-            for message in self._consumer:
-                self.process_message(message)
+            update = to_resource_update(MessageResourcePayload.model_validate(message.value))
+        except (ValidationError, TypeError, ValueError) as error:
+            logger.warning("Mensaje descartado (%s offset %s): formato no válido: %s", message.topic, message.offset, error)
+            return
 
-        except Exception as e:
-            print(f"[ERROR FATAL DE CONSUMO] Ocurrió un error crítico durante el consumo: {e}")
-        finally:
-            self._consumer.stop()
-
-    def stop_consuming(self):
-        """
-        Inicia el bucle infinito de consumo y procesamiento, bloqueando la ejecución.
-        Debe ejecutarse como un proceso dedicado (daemon/worker).
-        """
-        print(f"[*] Iniciando Kafka Update Consumer Service para grupo ···· en tópicos: {', '.join(self._topics_consumer)}...")
         try:
-            self._consumer.stop()
-        except Exception as e:
-            print(f"[ERROR FATAL DE CONSUMO] Ocurrió un error crítico durante el consumo: {e}")
-        finally:
-            self._consumer.stop()
+            async with self._apply_update_factory() as apply_update:
+                stored = await apply_update.apply(update)
+            logger.info("Recurso '%s' (%s) actualizado desde %s (id %s)",
+                        update.name, update.data_use.value, message.topic, stored.dictionary_id)
+        except DomainException as error:
+            logger.warning("Actualización no aplicada (%s offset %s): %s", message.topic, message.offset, error.message)
+        except Exception:
+            logger.exception("Error inesperado procesando %s offset %s", message.topic, message.offset)

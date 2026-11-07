@@ -40,6 +40,7 @@ CREATE SEQUENCE data_dict_registry_seq;
 
 CREATE TABLE data_dict_registry (
     dictionary_id INTEGER NOT NULL DEFAULT nextval('data_dict_registry_seq'),
+    name_data VARCHAR(150) NOT NULL,
     data_use_dictionay data_use NOT NULL,
     description_data JSONB NOT NULL,
     fields JSONB DEFAULT '[]'::JSONB
@@ -62,6 +63,22 @@ ALTER TABLE link_dict_application ADD CONSTRAINT fk_dictionary_id_data_dict_regi
 CREATE INDEX idx_link_dict_application_application_id ON link_dict_application (application_id);
 ALTER TABLE link_dict_application ADD CONSTRAINT fk_application_id_registry_applications
     FOREIGN KEY (application_id) REFERENCES registry_applications(application_id);
+
+
+-- Transactional outbox: events are written in the same transaction as the data change and
+-- published to Kafka by the outbox relay after the commit (at-least-once delivery).
+DROP TABLE IF EXISTS event_outbox CASCADE;
+CREATE TABLE event_outbox (
+    event_id BIGSERIAL PRIMARY KEY,
+    event_type VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_at TIMESTAMPTZ,
+    failed_at TIMESTAMPTZ,          -- set when the event can never be published (dead-lettered)
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
+CREATE INDEX idx_event_outbox_pending ON event_outbox (event_id) WHERE published_at IS NULL AND failed_at IS NULL;
 
 
 ----------------------------------------------------------------------------------------------------------------------------------

@@ -1,87 +1,101 @@
 import asyncio
 import json
-import os
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, Optional
 
 from aiokafka import AIOKafkaProducer
-from dotenv import dotenv_values
-from pathlib import Path
+from aiokafka.errors import KafkaError
+
+from resources_orchester.application.ports.outbound.resource_event_publisher_port_out import ResourceEventPublisherPortOut
+from resources_orchester.domain.enum.data_use import DataUse
+from resources_orchester.domain.enum.family_resources import FamilyResource
+from resources_orchester.domain.exception.infrastructure_exceptions import MessagingException
 from resources_orchester.domain.model.data_resources import DataResources
-from ..dtos.message_resource_payload import MessageResourcePayload 
+from resources_orchester.infrastructure.bootstrap.settings import KafkaSettings
+from ..dtos.message_resource_payload import MessageResourcePayload
 
-from kafka import KafkaProducer
+logger = logging.getLogger(__name__)
 
-class WorkerKafkaProducer:
+
+def _serialize(value: Any) -> bytes:
+    return json.dumps(value).encode("utf-8")
+
+
+class WorkerKafkaProducer(ResourceEventPublisherPortOut):
     """
-    Implementa el puerto KafkaPortOut, actuando como un Adapter para enviar mensajes reales a Kafka.
-    Este componente vive en la capa de infraestructura y contiene la lógica concreta 
-    de conexión al broker de Kafka.
+    Implements ResourceEventPublisherPortOut: adapter that publishes messages to Kafka with aiokafka.
+
+    Application-scoped: the composition root creates ONE instance, starts it in the lifespan
+    and closes it on shutdown, so every request reuses the same producer (and broker
+    connections) instead of opening a new one.
+
+    If the broker is unreachable at startup the application still starts (read endpoints do
+    not need Kafka); the connection is retried lazily on the next publish, and while Kafka
+    stays down publishing raises MessagingException.
     """
-    def __init__(self, env_use: str = "dev"):
-        """
-        Inicializa el productor de Kafka.
 
-        Args:
-            bootstrap_servers: Diccionario de configuración que contiene 'server'.
-        """
-        env_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.{env_use}")) if f.is_file()][0])
-        self._messagin_config: Dict[str, str] = dotenv_values(env_path)
-        self._bootstrap = self._messagin_config['KAFKA_BOOTSTRAP_SERVERS'] if "KAFKA_BOOTSTRAP_SERVERS" in self._messagin_config else os.getenv("bootstrap_servers")
-        self._topics: List[str] = [x for x in self._messagin_config['KAFKA_PRODUCER_TOPICS'].split(",")]
+    def __init__(self, settings: KafkaSettings):
+        self._settings = settings
+        self._producer: Optional[AIOKafkaProducer] = None
+        self._start_lock = asyncio.Lock()
 
-    
-    async def init_producer(self):
-        self._producer = AIOKafkaProducer(bootstrap_servers=self._bootstrap,
-                                          value_serializer=lambda x: json.loads(x.decode('utf-8')))
-        await self._producer.start()
-
-    def send_message_to_update(self, destiny_message: dict[str, Any], message: DataResources) -> None:
-        """
-        Envía un mensaje de actualización a un destino específico (Topic), 
-        utilizando el DTO estructurado.
-        
-        Args:
-            destiny_message (dict): El identificador del destino (el tópico en Kafka). 
-                                    Debe contener al menos la clave 'topic'.
-            message (MessageResourcePayload): La carga útil tipada con MessageResourcePayload.
-        """
+    async def start(self) -> bool:
+        """Connects to the broker. Non-fatal: returns False (and logs) if Kafka is unreachable."""
         try:
-            topic = destiny_message.get('topic') 
-            if not topic or topic not in self._topics:
-                raise ValueError("destiny_message debe contener la clave 'topic'.")
+            await self._ensure_started()
+            return True
+        except MessagingException as error:
+            logger.warning("Kafka producer not started, will retry on the next publish: %s", error)
+            return False
 
-            message_payload: MessageResourcePayload = MessageResourcePayload.from_data_resources(destiny_message, message)
-            message_dict = message_payload.model_dump()
-            
-            self._producer.send(topic, value=message_dict)
-            self._producer.flush() # Forzar el envío inmediato (útil para logs/tests)
+    async def _ensure_started(self) -> AIOKafkaProducer:
+        if self._producer is not None:
+            return self._producer
+        async with self._start_lock:
+            if self._producer is None:  # another coroutine may have started it while we waited
+                producer = AIOKafkaProducer(
+                    bootstrap_servers=self._settings.bootstrap_servers,
+                    value_serializer=_serialize,
+                    request_timeout_ms=self._settings.request_timeout_ms,
+                )
+                try:
+                    await producer.start()
+                except KafkaError as error:
+                    await producer.stop()
+                    raise MessagingException(
+                        f"Kafka no disponible en '{self._settings.bootstrap_servers}': {error}") from error
+                self._producer = producer
+                logger.info("Kafka producer connected to %s", self._settings.bootstrap_servers)
+        return self._producer
 
-        except Exception as e:
-            print(f"[ERROR] Fallo al enviar mensaje de actualización a '{destiny_message}': {e}")
+    async def publish_resource_updated(self, resource: DataResources, family: FamilyResource, data_use: DataUse) -> None:
+        """Publishes the resource to the configured update topic and waits for the broker ack."""
+        destination = {"family_destination": family, "resource_value": data_use}
 
-    def send_message_to_request(self, destiny_message: dict[str, Any], message: dict[str, Any]) -> None:
-        """
-        Envía un mensaje para solicitar una acción (evento de solicitud) a un destino específico.
-        (Esta función mantiene su firma original ya que no fue modificada en este paso).
+        payload = MessageResourcePayload.from_data_resources(destination, resource).model_dump(mode="json")
+        message: dict = {"destination": destination, "message_data": payload}
+        await self._send(self._settings.update_topic, message)
 
-        Args:
-            destiny_message (dict): El identificador del destino (el tópico en Kafka). 
-                                    Debe contener al menos la clave 'topic'.
-            message (dict): La carga útil con los datos y parámetros de la solicitud.
-        """
+    async def send_message_to_request(self, destiny_message: Dict[str, Any], message: Dict[str, Any]) -> None:
+        """Sends a request/command message to ``destiny_message['topic']`` (must be a producer topic)."""
+        topic = destiny_message.get("topic")
+        if not topic or topic not in self._settings.producer_topics:
+            raise MessagingException(
+                f"Tópico '{topic}' no válido: debe ser uno de {self._settings.producer_topics}.")
+        await self._send(topic, message)
+
+    async def _send(self, topic: str, payload: Dict[str, Any]) -> None:
+        producer = await self._ensure_started()
         try:
-            # Asumimos que el topic está anidado o es fácilmente accesible
-            topic = destiny_message.get('topic')
-            if not topic or topic not in self._topics:
-                raise ValueError("destiny_message debe contener la clave 'topic'.")
+            await producer.send_and_wait(topic, value=payload)
+        except KafkaError as error:
+            raise MessagingException(f"No se pudo publicar en el tópico '{topic}': {error}") from error
 
-            print(f"[INFO] Enviando solicitud a tópico '{topic}'...")
-            self._producer.send(topic, value=message)
-            self._producer.flush() 
-            print("[SUCCESS] Mensaje de solicitud enviado exitosamente.")
-        except Exception as e:
-            print(f"[ERROR] Fallo al enviar mensaje de solicitud a '{destiny_message}': {e}")
+    async def close(self) -> None:
+        """Flushes pending messages and closes the broker connections (application shutdown)."""
+        async with self._start_lock:
+            if self._producer is not None:
+                producer, self._producer = self._producer, None
+                await producer.stop()
 
-    def close(self):
-        """Cierra la conexión del productor."""
-        self._producer.stop()
+

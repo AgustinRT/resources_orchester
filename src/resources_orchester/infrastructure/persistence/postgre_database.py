@@ -1,88 +1,67 @@
 import contextlib
-import os
-from dotenv import load_dotenv, find_dotenv
-import sqlalchemy
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from resources_orchester.infrastructure.bootstrap.settings import DatabaseSettings
+
 
 class DatabaseManager:
     """
-    Gestiona la conexión al pool de la base de datos PostgreSQL de forma asíncrona.
-    Implementa un patrón Singleton para asegurar que solo haya una instancia
-    de motor y sesión en toda la aplicación.
+    Owns the SQLAlchemy async engine (with its connection pool) and the session factory.
+
+    Plain class: the composition root creates ONE instance per application in the lifespan,
+    stores it in ``app.state`` and disposes it on shutdown. Configuration is injected; this
+    class never reads environment variables or dotenv files.
+
+    Creating the engine does not open connections: they are opened lazily and then reused
+    from the pool (pool_size + max_overflow bound the connections per process).
     """
-    _instance = None
-    _engine = None
-    _async_session: async_sessionmaker[AsyncSession] = None
-    _pool_ready = False
-    _url_conn = None
 
-    def __new__(self, url_conn: str = None):
-        if self._instance is None:
-            self._url_conn = url_conn
-            self._instance = super(DatabaseManager, self).__new__(self)
-        return self._instance
-
-    @staticmethod
-    def _load_env():
-        """Carga las variables de entorno desde el archivo .env."""
-        if not os.path.exists(".env"):
-            print("Advertencia: No se encontró el archivo .env. Usando variables de entorno del sistema.")
-            return
-
-        load_dotenv(find_dotenv())
-
-    def health_pool(self)-> bool:
-        return self._pool_ready
-
-    @classmethod
-    async def init_engine(self):
-        """Establece la conexión al motor y la sesión."""
-        self._load_env()
-
-        control_url: str = f"postgresql://{os.environ["POSTGRES_USER"]}:{os.environ["POSTGRES_PASSWORD"]}@{os.environ["POSTGRES_HOST"]}:{os.environ["PORT"]}/{os.environ["POSTGRES_DB"]}"
-
-        db_url = control_url if not self._url_conn else self._url_conn.replace("+psycopg", "")
-        if not db_url:
-            raise EnvironmentError(
-                "DATABASE_URL no está definida en las variables de entorno o en el .env file."
-            )
-
-        self._engine = create_async_engine(
-                            db_url,
-                            poolclass=sqlalchemy.pool.NullPool
-                        )
-
-        self._async_session = async_sessionmaker(
+    def __init__(self, settings: DatabaseSettings):
+        self._engine: AsyncEngine = create_async_engine(
+            settings.sqlalchemy_url(),
+            pool_size=settings.pool_size,
+            max_overflow=settings.max_overflow,
+            pool_timeout=settings.pool_timeout_seconds,
+            pool_pre_ping=settings.pool_pre_ping,
+        )
+        self._session_factory = async_sessionmaker(
             bind=self._engine,
             autoflush=False,
             class_=AsyncSession,
-            expire_on_commit=False
+            expire_on_commit=False,
         )
-        self._pool_ready = True
+
+    @property
+    def engine(self) -> AsyncEngine:
+        return self._engine
 
     @contextlib.asynccontextmanager
-    async def get_session(self) -> AsyncGenerator[AsyncSession]:
-        if self._async_session is None:
-            raise Exception("DatabaseSessionManager is not initialized")
-
-        session = self._async_session()
+    async def session(self) -> AsyncGenerator[AsyncSession]:
+        """Unit of work: commits if the block succeeds, rolls back if it raises."""
+        session = self._session_factory()
         try:
             yield session
-
             await session.commit()
-        except Exception:
+        except BaseException:
             await session.rollback()
             raise
         finally:
             await session.close()
 
+    @contextlib.asynccontextmanager
+    async def open_session(self) -> AsyncGenerator[AsyncSession]:
+        """
+        Session WITHOUT automatic commit: whatever is not committed explicitly (by a unit of
+        work) is rolled back when the session closes. Used per HTTP request / Kafka message.
+        """
+        session = self._session_factory()
+        try:
+            yield session
+        finally:
+            await session.close()
 
-    @classmethod
-    async def close_db_pool(self):
-        """Desconecta el motor de la base de datos al cerrar la aplicación."""
-        if self._engine:
-            print("Cerrando pool de conexiones de la base de datos...")
-            await self._engine.dispose()
-            self._async_session = None
-        self._pool_ready = False
+    async def dispose(self) -> None:
+        """Closes every pooled connection. Called once, on application shutdown."""
+        await self._engine.dispose()

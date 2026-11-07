@@ -1,3 +1,6 @@
+from resources_orchester.domain.exception.domain_exceptions import DomainException
+
+
 class PersistenceException(DomainException):
     """Raised when an error occurs while interacting with the database."""
     pass

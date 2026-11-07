@@ -11,3 +11,7 @@ class ValidationException(DomainException):
 class MessageFormatException(DomainException):
     """Raised when the format or content of a message is invalid."""
     pass
+
+class NotFoundException(DomainException):
+    """Raised when a referenced entity (resource, application...) does not exist."""
+    pass

@@ -1,44 +1,36 @@
-import json
-import os
-from typing import Dict, List
+import logging
+from typing import List
 
-from dotenv import dotenv_values
-from pathlib import Path
 from kafka.admin import KafkaAdminClient, NewTopic
+
+from resources_orchester.infrastructure.bootstrap.settings import KafkaSettings
+
+logger = logging.getLogger(__name__)
+
 
 class WorkerKafkaAdmin:
     """
-    Implementa el puerto KafkaPortOut, actuando como un Adapter para enviar mensajes reales a Kafka.
-    Este componente vive en la capa de infraestructura y contiene la lógica concreta 
-    de conexión al broker de Kafka.
+    Kafka administration helper: creates the topics this service produces to and consumes from.
+    Configuration is injected (KafkaSettings); nothing is read from files or the environment.
     """
-    def __init__(self, env_use: str = "dev"):
-        """
-        Inicializa el productor de Kafka.
 
-        Args:
-            bootstrap_servers: Diccionario de configuración que contiene 'server'.
-        """
+    def __init__(self, settings: KafkaSettings, num_partitions: int = 1, replication_factor: int = 1):
+        self._settings = settings
+        self._num_partitions = num_partitions
+        self._replication_factor = replication_factor
 
-        env_path = str([f for f in (Path(os.path.abspath("")).rglob(f".env.messaging.{env_use}")) if f.is_file()][0])
-        
-        self._messagin_config: Dict[str, str] = dotenv_values(env_path)
-        bootstrap = self._messagin_config['KAFKA_BOOTSTRAP_SERVERS'] if "KAFKA_BOOTSTRAP_SERVERS" in self._messagin_config else os.getenv("bootstrap_servers")
-        admin_client = KafkaAdminClient(
-             bootstrap_servers=bootstrap,
-
-        )
-
-        topics: List[str] = [x for x in self._messagin_config['KAFKA_PRODUCER_TOPICS'].split(",")] + [x for x in self._messagin_config['KAFKA_CONSUMER_TOPICS'].split(",")]
-        topic_list = []
-        for t in topics:
-            topic = NewTopic(name=t, num_partitions=1, replica_assignments=1)
-            topic_list.append(topic)
-
+    def ensure_topics(self) -> List[str]:
+        """Creates every configured producer/consumer topic that does not exist yet. Returns the created ones."""
+        wanted = list(dict.fromkeys(self._settings.producer_topics + self._settings.consumer_topics))
+        admin_client = KafkaAdminClient(bootstrap_servers=self._settings.bootstrap_servers)
         try:
-            admin_client.create_topics([NewTopic(name="update", num_partitions=1, replica_assignments=1)],
-                                       validate_only=False)
-        except Exception as e:
-            print(e)
-            raise
-
+            missing = [topic for topic in wanted if topic not in set(admin_client.list_topics())]
+            if missing:
+                admin_client.create_topics(
+                    [NewTopic(name=topic, num_partitions=self._num_partitions, replication_factor=self._replication_factor)
+                     for topic in missing],
+                    validate_only=False)
+                logger.info("Kafka topics created: %s", ", ".join(missing))
+            return missing
+        finally:
+            admin_client.close()

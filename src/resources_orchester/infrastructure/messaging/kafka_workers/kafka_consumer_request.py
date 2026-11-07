@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Optional
 from kafka import KafkaConsumer
 
 class KafkaRequestConsumerService:
@@ -8,7 +8,7 @@ class KafkaRequestConsumerService:
     Maneja temas diseñados para disparar acciones o comandos específicos.
     """
 
-    def __init__(self, bootstrap_servers: list[str], group_id: str = "mcps", topics: List[str] = None):
+    def __init__(self, bootstrap_servers: list[str], group_id: str = "mcps", topics: Optional[List[str]] = None):
         """
         Inicializa el consumidor para eventos de solicitud/comando.
 
