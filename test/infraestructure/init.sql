@@ -3,6 +3,9 @@ DROP DATABASE IF EXISTS resourcesdb WITH (FORCE);
 CREATE DATABASE resourcesdb WITH OWNER = admin ENCODING = 'UTF8';
 \c resourcesdb
 
+-- pgvector: vector data type and similarity operators (needs the pgvector/pgvector image, see docker-compose.yaml).
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TYPE data_use AS ENUM ('ASYNC_MESSAGE', 'DB_TABLE', 'REST_OBJ');
 
 drop table IF EXISTS type_applications_definition CASCADE;
@@ -63,6 +66,32 @@ ALTER TABLE link_dict_application ADD CONSTRAINT fk_dictionary_id_data_dict_regi
 CREATE INDEX idx_link_dict_application_application_id ON link_dict_application (application_id);
 ALTER TABLE link_dict_application ADD CONSTRAINT fk_application_id_registry_applications
     FOREIGN KEY (application_id) REFERENCES registry_applications(application_id);
+
+
+-- Accesses of users to resources, with the embedding of the prompt they used (vector table).
+-- * username identifies ONE user, but a user has many accesses: it is NOT unique here.
+-- * predicate_embed has no fixed dimension yet (it depends on the embedding model, see model_name);
+--   fix it and add an HNSW index once the model is chosen. The vector and the model that built it
+--   are stored together or not at all (an access is registered before its embedding exists).
+-- * The FK has no ON DELETE action, like the other FKs: a resource with accesses cannot be deleted.
+drop table IF EXISTS resource_user_access CASCADE;
+drop SEQUENCE IF EXISTS resource_user_access_seq;
+CREATE SEQUENCE resource_user_access_seq;
+
+CREATE TABLE resource_user_access (
+    id BIGINT NOT NULL DEFAULT nextval('resource_user_access_seq'),
+    username VARCHAR(150) NOT NULL,
+    resource_id INTEGER NOT NULL,
+    predicate TEXT NOT NULL,
+    predicate_embed vector,
+    model_name VARCHAR(255),
+    CONSTRAINT ck_resource_user_access_embed_with_model CHECK ((predicate_embed IS NULL) = (model_name IS NULL))
+);
+ALTER TABLE resource_user_access ADD PRIMARY KEY (id);
+
+CREATE INDEX idx_resource_user_access_resource_id ON resource_user_access (resource_id);
+ALTER TABLE resource_user_access ADD CONSTRAINT fk_resource_id_data_dict_registry
+    FOREIGN KEY (resource_id) REFERENCES data_dict_registry(dictionary_id);
 
 
 -- Transactional outbox: events are written in the same transaction as the data change and

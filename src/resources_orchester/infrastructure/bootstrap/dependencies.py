@@ -25,22 +25,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from resources_orchester.application.ports.inbound.apply_resource_update_port_in import ApplyResourceUpdatePortIn
 from resources_orchester.application.ports.inbound.create_message_resource_port_in import CreateMessageResourcePortIn
+from resources_orchester.application.ports.inbound.resource_access_port_in import ResourceAccessPortIn
 from resources_orchester.application.ports.inbound.search_resources_port_in import SearchResourcesPortIn
 from resources_orchester.application.ports.outbound.application_query_port_out import ApplicationQueryPortOut
 from resources_orchester.application.ports.outbound.event_outbox_port_out import EventOutboxPortOut
 from resources_orchester.application.ports.outbound.reference_command_port_out import ReferenceCommandPortOut
 from resources_orchester.application.ports.outbound.reference_query_port_out import ReferenceQueryPortOut
+from resources_orchester.application.ports.outbound.resource_access_port_out import ResourceAccessPortOut
 from resources_orchester.application.ports.outbound.resource_query_port_out import ResourceQueryPortOut
 from resources_orchester.application.ports.outbound.unit_of_work_port import UnitOfWorkPort
 from resources_orchester.application.use_cases.apply_resource_update import ApplyResourceUpdate
 from resources_orchester.application.use_cases.create_message_resource import CreateMessageResource
+from resources_orchester.application.use_cases.manage_resource_access import ManageResourceAccess
 from resources_orchester.application.use_cases.search_resources import SearchResources
 from resources_orchester.infrastructure.bootstrap.settings import Settings
 from resources_orchester.infrastructure.messaging.kafka_workers.kafka_consumer_update import ApplyResourceUpdateFactory
+from resources_orchester.infrastructure.persistence.embeddings.embedding_client import EmbeddingClient
 from resources_orchester.infrastructure.persistence.postgre_database import DatabaseManager
 from resources_orchester.infrastructure.persistence.repositories.application_repository import ApplicationRepository
 from resources_orchester.infrastructure.persistence.repositories.outbox_repository import OutboxRepository
 from resources_orchester.infrastructure.persistence.repositories.reference_repository import ReferenceRepository
+from resources_orchester.infrastructure.persistence.repositories.resource_access_repository import ResourceAccessRepository
 from resources_orchester.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 
@@ -52,6 +57,11 @@ def get_settings(request: Request) -> Settings:
 
 def get_database(request: Request) -> DatabaseManager:
     return request.app.state.database
+
+
+def get_embedding_client(request: Request) -> EmbeddingClient:
+    """AI model client chosen by EMBEDDING_* configuration (created once by the lifespan)."""
+    return request.app.state.embedding_client
 
 
 def notify_outbox_relay(request: Request) -> None:
@@ -94,12 +104,18 @@ def get_event_outbox_port_out(session: DbSession) -> EventOutboxPortOut:
     return OutboxRepository(session)
 
 
+def get_resource_access_port_out(session: DbSession,
+                                 embedding_client: Annotated[EmbeddingClient, Depends(get_embedding_client)]) -> ResourceAccessPortOut:
+    return ResourceAccessRepository(session, embedding_client)
+
+
 UnitOfWork = Annotated[UnitOfWorkPort, Depends(get_unit_of_work)]
 ReferenceQueryPort = Annotated[ReferenceQueryPortOut, Depends(get_reference_query_port_out)]
 ReferenceCommandPort = Annotated[ReferenceCommandPortOut, Depends(get_reference_command_port_out)]
 ResourceQueryPort = Annotated[ResourceQueryPortOut, Depends(get_resource_query_port_out)]
 ApplicationQueryPort = Annotated[ApplicationQueryPortOut, Depends(get_application_query_port_out)]
 EventOutboxPort = Annotated[EventOutboxPortOut, Depends(get_event_outbox_port_out)]
+ResourceAccessPort = Annotated[ResourceAccessPortOut, Depends(get_resource_access_port_out)]
 
 
 # --- Use cases: one provider each, with only the ports it needs -----------------------
@@ -114,8 +130,18 @@ def get_search_resources(resource_query: ResourceQueryPort) -> SearchResourcesPo
     return SearchResources(resource_query_port_out=resource_query)
 
 
+def get_resource_access_service(unit_of_work: UnitOfWork, resource_access: ResourceAccessPort,
+                                settings: Annotated[Settings, Depends(get_settings)]) -> ResourceAccessPortIn:
+    """The search values come from configuration (ResourceAccessSettings), never from the use case."""
+    search = settings.resource_access
+    return ManageResourceAccess(unit_of_work=unit_of_work, resource_access_port_out=resource_access,
+                                list_limit=search.list_limit, similarity_limit=search.similarity_limit,
+                                min_similarity=search.min_similarity)
+
+
 CreateMessageResourceService = Annotated[CreateMessageResourcePortIn, Depends(get_create_message_resource)]
 SearchResourcesService = Annotated[SearchResourcesPortIn, Depends(get_search_resources)]
+ResourceAccessService = Annotated[ResourceAccessPortIn, Depends(get_resource_access_service)]
 
 
 # --- Non-HTTP driving adapters (Kafka consumer) ---------------------------------------

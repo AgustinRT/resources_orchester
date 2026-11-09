@@ -8,5 +8,7 @@ from resources_orchester.infrastructure.persistence.entities.data_dict_registry 
 from resources_orchester.infrastructure.persistence.entities.link_dict_application import DataDictionaryAppRef
 from resources_orchester.infrastructure.persistence.entities.outbox_event import OutboxEvent
 from resources_orchester.infrastructure.persistence.entities.registry_applications import RegistryApplications
+from resources_orchester.infrastructure.persistence.entities.resource_user_access import ResourceUserAccess
 
-__all__ = ["ApplicationsTypeDefinition", "DataRefDict", "DataDictionaryAppRef", "OutboxEvent", "RegistryApplications"]
+__all__ = ["ApplicationsTypeDefinition", "DataRefDict", "DataDictionaryAppRef", "OutboxEvent", "RegistryApplications",
+           "ResourceUserAccess"]

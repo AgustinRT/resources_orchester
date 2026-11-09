@@ -90,7 +90,8 @@ async def truncate_resource_tables(database_manager) -> AsyncGenerator[None]:
     """
     yield
     async with database_manager.session() as session:
-        await session.execute(text("TRUNCATE link_dict_application, data_dict_registry, event_outbox"))
+        # resource_user_access references data_dict_registry: PostgreSQL only truncates both together.
+        await session.execute(text("TRUNCATE link_dict_application, resource_user_access, data_dict_registry, event_outbox"))
 
 
 @pytest_asyncio.fixture(scope="function")

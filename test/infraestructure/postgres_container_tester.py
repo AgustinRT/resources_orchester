@@ -17,7 +17,8 @@ INIT_SQL_PATH = Path(__file__).resolve().parent / "init.sql"
 @contextlib.asynccontextmanager
 async def rise_postgres_container():
     control_path = str(INIT_SQL_PATH)
-    container = PostgresContainer(image="postgres:16-alpine",
+    # Same image as docker-compose.yaml: init.sql needs the pgvector extension.
+    container = PostgresContainer(image="pgvector/pgvector:pg16",
                                   username="admin",
                                   password="admin",
                                   # init.sql (re)creates and populates "resourcesdb"; connect to that

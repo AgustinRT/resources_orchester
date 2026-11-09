@@ -1,14 +1,16 @@
 services:
 
   resourcesdb:
-    image: postgres:16-alpine
+    # PostgreSQL 16 + pgvector (vector tables). Debian based: an existing ./data_store created with
+    # postgres:16-alpine needs a one-off REINDEX (see database/migrations/003_create_resource_user_access.sql).
+    image: pgvector/pgvector:pg16
     container_name: resourcesdb
     env_file:
       - .env
     ports:
       - 5432:5432
     volumes:
-      - ./database/data_store:/var/lib/postgresql/data
+      - ./data_store:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - mcp_network
@@ -30,21 +32,22 @@ services:
     volumes:
       - kafka_data_mcp:/data
 
-  # kafka-ui:
-  #   image: ghcr.io/kafbat/kafka-ui:latest
-  #   container_name: kafka-ui
-  #   ports:
-  #     - "8080:8080"
-  #   environment:
-  #     KAFKA_CLUSTERS_0_NAME: local
-  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
-  #     DYNAMIC_CONFIG_ENABLED: 'true'
-  #   depends_on:
-  #     - kafka
-  #   volumes:
-  #     - ~/kui/config.yml:/etc/kafkaui/dynamic_config.yaml
+  # Local embedding model (EMBEDDING_PROVIDER=ollama). Optional: only started with the "ollama" profile:
+  #   docker compose --profile ollama up -d
+  #   docker exec ollama ollama pull nomic-embed-text     # once; the model is kept in the volume
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["ollama"]
+    ports:
+      - 11434:11434
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - mcp_network
 
 volumes:
+  ollama_models:
   kafka_data_mcp:
   data_store:
 

@@ -10,14 +10,17 @@ from pydantic import ValidationError
 from resources_orchester.infrastructure.bootstrap.settings import (
     API_ENV_FILE,
     DATABASE_ENV_FILE,
+    EMBEDDING_ENV_FILE,
     KAFKA_ENV_FILE,
     ApiSettings,
     DatabaseSettings,
+    EmbeddingSettings,
     KafkaSettings,
+    ResourceAccessSettings,
     load_settings,
 )
 
-_SETTINGS_ENV_PREFIXES = ("POSTGRES_", "KAFKA_", "API_")
+_SETTINGS_ENV_PREFIXES = ("POSTGRES_", "KAFKA_", "API_", "EMBEDDING_", "RESOURCE_ACCESS_")
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +33,7 @@ def isolated_environment(monkeypatch):
 
 def test_env_files_exist_next_to_the_code():
     assert DATABASE_ENV_FILE.is_file() and KAFKA_ENV_FILE.is_file() and API_ENV_FILE.is_file()
+    assert EMBEDDING_ENV_FILE.is_file()
 
 
 def test_settings_do_not_depend_on_the_working_directory(tmp_path, monkeypatch):
@@ -91,3 +95,63 @@ def test_api_settings_defaults_match_env_file():
     settings = ApiSettings()
     assert (settings.prefix, settings.new_resource, settings.search_resource) == (
         "/v1/resources", "/{id_user}/messages/create", "/search")
+    assert (settings.new_resource_access, settings.search_resource_access, settings.similar_resource_access) == (
+        "/access", "/access", "/access/similar")
+
+
+def test_embedding_settings_default_to_voyage_without_a_committed_key():
+    settings = EmbeddingSettings()
+
+    assert (settings.provider, settings.model, settings.base_url, settings.timeout_seconds) == ("voyage", "voyage-3.5", None, 30)
+    assert settings.api_key is None  # the key never lives in the dotenv file
+    assert "EMBEDDING_API_KEY=" not in EMBEDDING_ENV_FILE.read_text().replace("# ", "")
+
+
+def test_switching_the_embedding_model_only_needs_configuration(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "ollama")
+    monkeypatch.setenv("EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "http://ollama:11434")
+
+    settings = load_settings().embedding
+
+    assert (settings.provider, settings.model, settings.base_url) == ("ollama", "nomic-embed-text", "http://ollama:11434")
+
+
+def test_embedding_api_key_comes_from_the_environment_and_is_secret(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_API_KEY", "vk-secret")
+
+    settings = EmbeddingSettings()
+
+    assert settings.api_key is not None and settings.api_key.get_secret_value() == "vk-secret"
+    assert "vk-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize("name, value", [("EMBEDDING_PROVIDER", "other"), ("EMBEDDING_MODEL", ""),
+                                         ("EMBEDDING_TIMEOUT_SECONDS", "0")])
+def test_invalid_embedding_settings_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        EmbeddingSettings()
+
+
+def test_resource_access_search_values_default_to_limit_10_and_similarity_075():
+    settings = ResourceAccessSettings()
+    assert (settings.list_limit, settings.similarity_limit, settings.min_similarity) == (10, 10, 0.75)
+
+
+def test_resource_access_search_values_are_configurable(monkeypatch):
+    monkeypatch.setenv("RESOURCE_ACCESS_SIMILARITY_LIMIT", "3")
+    monkeypatch.setenv("RESOURCE_ACCESS_MIN_SIMILARITY", "0.9")
+    monkeypatch.setenv("RESOURCE_ACCESS_LIST_LIMIT", "50")
+
+    settings = load_settings().resource_access
+
+    assert (settings.list_limit, settings.similarity_limit, settings.min_similarity) == (50, 3, 0.9)
+
+
+@pytest.mark.parametrize("name, value", [("RESOURCE_ACCESS_MIN_SIMILARITY", "1.5"), ("RESOURCE_ACCESS_MIN_SIMILARITY", "-0.1"),
+                                         ("RESOURCE_ACCESS_SIMILARITY_LIMIT", "0"), ("RESOURCE_ACCESS_LIST_LIMIT", "0")])
+def test_invalid_resource_access_search_values_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        ResourceAccessSettings()

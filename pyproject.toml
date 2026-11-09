@@ -11,7 +11,9 @@ dependencies = [
     "aiokafka>=0.14.0",
     "fastapi[standard]>=0.142.2",
     "kafka-python>=3.0.11",
+    "pgvector>=0.5.1",
     "psycopg[binary,pool]>=3.3.6",
+    "pydantic-settings>=2.7",
     "pydantic[email,timezone]>=2.13.5",
     "sqlalchemy[asyncio]>=2.1.2",
     "testcontainers[kafka,postgres]>=4.15.0",
@@ -26,6 +28,57 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
+    "mypy>=2.4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]
+
+# --- Static checks (review Phase 2). Both run in CI: `uv run lint-imports` and `uv run mypy`. ---
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "src"
+files = ["src/resources_orchester", "src/main.py"]
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# Third-party libraries without type information (no py.typed marker / stubs).
+module = ["kafka", "kafka.*", "aiokafka", "aiokafka.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+warn_required_dynamic_aliases = true
+
+[tool.importlinter]
+root_package = "resources_orchester"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Hexagonal layers: infrastructure -> application -> domain"
+type = "layers"
+layers = [
+    "resources_orchester.infrastructure",
+    "resources_orchester.application",
+    "resources_orchester.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain and application do not depend on frameworks or drivers"
+type = "forbidden"
+source_modules = ["resources_orchester.domain", "resources_orchester.application"]
+forbidden_modules = ["fastapi", "starlette", "sqlalchemy", "psycopg", "aiokafka", "kafka", "pydantic_settings", "dotenv", "testcontainers"]
+
+[[tool.importlinter.contracts]]
+name = "Single import root: never import the package through src.*"
+type = "forbidden"
+source_modules = ["resources_orchester"]
+forbidden_modules = ["src"]

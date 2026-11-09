@@ -9,6 +9,7 @@ from resources_orchester.infrastructure.bootstrap.settings import Settings
 from resources_orchester.infrastructure.messaging.kafka_workers.kafka_consumer_update import KafkaUpdateConsumerService
 from resources_orchester.infrastructure.messaging.kafka_workers.kafka_producer import WorkerKafkaProducer
 from resources_orchester.infrastructure.messaging.outbox_relay import OutboxRelay
+from resources_orchester.infrastructure.persistence.embeddings.embedding_factory import build_embedding_client
 from resources_orchester.infrastructure.persistence.postgre_database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,10 @@ async def lifespan(app: FastAPI):
     producer = WorkerKafkaProducer(settings.kafka)
     relay = OutboxRelay(database, producer, settings.kafka)
     consumer = KafkaUpdateConsumerService(settings.kafka, build_apply_resource_update_factory(database))
+    embedding_client = build_embedding_client(settings.embedding)
+    logger.info("Embedding model: %s", embedding_client.model_name)
+    if settings.embedding.provider == "voyage" and settings.embedding.api_key is None:
+        logger.warning("EMBEDDING_API_KEY is not set: registering and similarity search of accesses will answer 503")
 
     await producer.start()
     relay_task = asyncio.create_task(relay.run(), name="outbox-relay")
@@ -52,6 +57,7 @@ async def lifespan(app: FastAPI):
     app.state.outbox_relay = relay
     app.state.outbox_relay_task = relay_task
     app.state.kafka_consumer_task = consumer_task
+    app.state.embedding_client = embedding_client
     try:
         yield
     finally:
@@ -59,5 +65,6 @@ async def lifespan(app: FastAPI):
         await _stop(consumer_task)
         await _stop(relay_task)
         await producer.close()
+        await embedding_client.close()
         await database.dispose()
-        logger.info("Application resources released (consumer, outbox relay and producer stopped, DB pool disposed)")
+        logger.info("Application resources released (consumer, outbox relay and producer stopped, embedding client closed, DB pool disposed)")

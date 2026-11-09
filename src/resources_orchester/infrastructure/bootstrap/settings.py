@@ -12,7 +12,7 @@ Sources, highest priority first:
 Nothing else in the code base reads os.environ or dotenv files.
 """
 from pathlib import Path
-from typing import Annotated, List
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -24,6 +24,7 @@ PROJECT_ROOT = _PACKAGE_DIR.parents[1]                    # repository root (sou
 DATABASE_ENV_FILE = PROJECT_ROOT / ".env"
 KAFKA_ENV_FILE = _PACKAGE_DIR / "infrastructure" / "messaging" / ".env.messaging.dev"
 API_ENV_FILE = _PACKAGE_DIR / "infrastructure" / "api_router" / ".env.api"
+EMBEDDING_ENV_FILE = _PACKAGE_DIR / "infrastructure" / "persistence" / "embeddings" / ".env.embedding"
 
 
 class DatabaseSettings(BaseSettings):
@@ -75,12 +76,49 @@ class KafkaSettings(BaseSettings):
 
 
 class ApiSettings(BaseSettings):
-    """HTTP routes. Env vars: API_PREFIX, API_NEW_RESOURCE, API_SEARCH_RESOURCE."""
+    """HTTP routes. Env vars: API_PREFIX, API_NEW_RESOURCE, API_SEARCH_RESOURCE, API_NEW_RESOURCE_ACCESS,
+    API_SEARCH_RESOURCE_ACCESS, API_SIMILAR_RESOURCE_ACCESS."""
     model_config = SettingsConfigDict(env_prefix="API_", env_file=API_ENV_FILE, extra="ignore")
 
     prefix: str = "/v1/resources"
     new_resource: str = "/{id_user}/messages/create"
     search_resource: str = "/search"
+    new_resource_access: str = "/access"
+    search_resource_access: str = "/access"
+    similar_resource_access: str = "/access/similar"
+
+
+class EmbeddingSettings(BaseSettings):
+    """
+    AI model that builds the embeddings. Env vars: EMBEDDING_PROVIDER, EMBEDDING_MODEL,
+    EMBEDDING_API_KEY, EMBEDDING_BASE_URL, EMBEDDING_TIMEOUT_SECONDS.
+    Switching model = changing these values (see persistence/embeddings/embedding_factory.py).
+    The API key must come from the environment: never write it in the (committed) dotenv file.
+    """
+    model_config = SettingsConfigDict(env_prefix="EMBEDDING_", env_file=EMBEDDING_ENV_FILE, extra="ignore")
+
+    provider: Literal["voyage", "ollama"] = "voyage"
+    model: str = Field("voyage-3.5", min_length=1)
+    api_key: Optional[SecretStr] = None
+    base_url: Optional[str] = None          # None = the provider's default URL
+    timeout_seconds: float = Field(30.0, gt=0)
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def _empty_means_not_set(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
+
+
+class ResourceAccessSettings(BaseSettings):
+    """
+    Values used by the resource-access searches (definable, not hard-coded in the logic).
+    Env vars: RESOURCE_ACCESS_LIST_LIMIT, RESOURCE_ACCESS_SIMILARITY_LIMIT, RESOURCE_ACCESS_MIN_SIMILARITY.
+    """
+    model_config = SettingsConfigDict(env_prefix="RESOURCE_ACCESS_", env_file=API_ENV_FILE, extra="ignore")
+
+    list_limit: int = Field(10, ge=1)                     # max accesses returned by username/resource
+    similarity_limit: int = Field(10, ge=1)               # max accesses returned by similarity
+    min_similarity: float = Field(0.75, ge=0.0, le=1.0)   # minimum cosine similarity (0.75 = 75 %)
 
 
 class Settings(BaseModel):
@@ -88,8 +126,11 @@ class Settings(BaseModel):
     database: DatabaseSettings
     kafka: KafkaSettings
     api: ApiSettings
+    embedding: EmbeddingSettings
+    resource_access: ResourceAccessSettings
 
 
 def load_settings() -> Settings:
     """Reads every settings group from its sources. Called once per application instance."""
-    return Settings(database=DatabaseSettings(), kafka=KafkaSettings(), api=ApiSettings())
+    return Settings(database=DatabaseSettings(), kafka=KafkaSettings(), api=ApiSettings(),
+                    embedding=EmbeddingSettings(), resource_access=ResourceAccessSettings())

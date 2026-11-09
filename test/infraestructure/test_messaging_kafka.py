@@ -67,7 +67,7 @@ async def test_simply_kafka_producer(producer_port_out: ResourceEventPublisherPo
     list_names: list[str] = [data_message.name, data_message_2.name]
 
     for message in consumer_container:
-        message_consumed: MessageResourcePayload = MessageResourcePayload.from_message_resources(message.value)
+        message_consumed: MessageResourcePayload = MessageResourcePayload.from_message_resources(message.value["message_data"])
         assert message_consumed.source in list_names
         message_processed += 1
 
@@ -76,18 +76,23 @@ async def test_simply_kafka_producer(producer_port_out: ResourceEventPublisherPo
 
 @pytest.mark.asyncio
 async def test_published_payload_contract(producer_port_out: ResourceEventPublisherPortOut, consumer_container: KafkaConsumer):
-    """The JSON on the wire carries the family, the type and the full resource content."""
+    """
+    The JSON on the wire is an envelope {"destination": ..., "message_data": ...}; ``message_data``
+    carries the family, the type and the full resource content (MessageResourcePayload).
+    """
     resource = create_random_data_resources()
     await producer_port_out.publish_resource_updated(resource, FamilyResource.DATAS, DataUse.DB_TABLE)
 
     values = [message.value for message in consumer_container]
 
     assert len(values) == 1
-    assert values[0]["family_resource"] == "datas"
-    assert values[0]["type_resource"] == "DB_TABLE"
-    assert values[0]["source"] == resource.name
-    assert values[0]["content"]["description"] == resource.description
-    assert values[0]["content"]["fields"] == [field.model_dump() for field in resource.fields]
+    assert set(values[0]) == {"destination", "message_data"}
+    message_data = values[0]["message_data"]
+    assert message_data["family_resource"] == "datas"
+    assert message_data["type_resource"] == "DB_TABLE"
+    assert message_data["source"] == resource.name
+    assert message_data["content"]["description"] == resource.description
+    assert message_data["content"]["fields"] == [field.model_dump() for field in resource.fields]
 
 
 @pytest.mark.asyncio
@@ -152,7 +157,7 @@ async def test_producer_reconnects_lazily_once_the_broker_is_reachable(kafka_con
         try:
             resource = create_random_data_resources()
             await producer.publish_resource_updated(resource, FamilyResource.DATAS, DataUse.ASYNC_MESSAGE)
-            assert [message.value["source"] for message in consumer] == [resource.name]
+            assert [message.value["message_data"]["source"] for message in consumer] == [resource.name]
         finally:
             consumer.close()
             await producer.close()

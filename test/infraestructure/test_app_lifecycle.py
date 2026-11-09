@@ -48,10 +48,13 @@ def _free_port() -> int:
 
 
 def _published_names(kafka_container: str, topic: str) -> List[str]:
-    """Every resource name published on ``topic`` (reads until the topic is idle for 5 s)."""
+    """
+    Every resource name published on ``topic`` (reads until the topic is idle for 5 s).
+    The producer wraps the payload in an envelope: {"destination": ..., "message_data": MessageResourcePayload}.
+    """
     consumer = consumer_tester(kafka_container, topic)
     try:
-        return [json.loads(json.dumps(message.value))["source"] for message in consumer]
+        return [json.loads(json.dumps(message.value))["message_data"]["source"] for message in consumer]
     finally:
         consumer.close()
 
